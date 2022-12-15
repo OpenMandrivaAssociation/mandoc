@@ -1,0 +1,165 @@
+diff -up mandoc-1.14.6/read.c.1~ mandoc-1.14.6/read.c
+--- mandoc-1.14.6/read.c.1~	2021-09-23 20:03:23.000000000 +0200
++++ mandoc-1.14.6/read.c	2022-12-15 23:00:05.650711633 +0100
+@@ -37,7 +37,11 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <unistd.h>
++#ifdef USE_LIBARCHIVE
++#include <archive.h>
++#else
+ #include <zlib.h>
++#endif
+ 
+ #include "mandoc_aux.h"
+ #include "mandoc.h"
+@@ -59,7 +63,9 @@ struct	mparse {
+ 	struct buf	 *loop; /* open .while request line */
+ 	const char	 *os_s; /* default operating system */
+ 	int		  options; /* parser options */
++#ifndef USE_LIBARCHIVE
+ 	int		  gzip; /* current input file is gzipped */
++#endif
+ 	int		  filenc; /* encoding of the current file */
+ 	int		  reparse_count; /* finite interp. stack */
+ 	int		  line; /* line number in the file */
+@@ -435,11 +441,24 @@ static int
+ read_whole_file(struct mparse *curp, int fd, struct buf *fb, int *with_mmap)
+ {
+ 	struct stat	 st;
++#ifdef USE_LIBARCHIVE
++	struct archive	*a;
++	struct archive_entry	*ae;
++#else
+ 	gzFile		 gz;
++	int		 gzerrnum;
++#endif
+ 	size_t		 off;
+ 	ssize_t		 ssz;
+-	int		 gzerrnum, retval;
++	int		 retval;
+ 
++#ifdef USE_LIBARCHIVE
++	a = archive_read_new();
++	archive_read_support_filter_all(a);
++	archive_read_support_format_raw(a);
++	archive_read_open_fd(a, fd, 16384);
++	archive_read_next_header(a, &ae);
++#else
+ 	if (fstat(fd, &st) == -1) {
+ 		mandoc_msg(MANDOCERR_FSTAT, 0, 0, "%s", strerror(errno));
+ 		return -1;
+@@ -485,6 +504,7 @@ read_whole_file(struct mparse *curp, int
+ 		}
+ 	} else
+ 		gz = NULL;
++#endif
+ 
+ 	/*
+ 	 * If this isn't a regular file (like, say, stdin), then we must
+@@ -504,29 +524,41 @@ read_whole_file(struct mparse *curp, int
+ 			}
+ 			resize_buf(fb, 65536);
+ 		}
++#ifdef USE_LIBARCHIVE
++		ssz = archive_read_data(a, fb->buf + (int)off, fb->sz - off);
++#else
+ 		ssz = curp->gzip ?
+ 		    gzread(gz, fb->buf + (int)off, fb->sz - off) :
+ 		    read(fd, fb->buf + (int)off, fb->sz - off);
++#endif
+ 		if (ssz == 0) {
+ 			fb->sz = off;
+ 			retval = 0;
+ 			break;
+ 		}
+ 		if (ssz == -1) {
++#ifdef USE_LIBARCHIVE
++			mandoc_msg(MANDOCERR_READ, 0, 0, "%s", strerror(errno));
++#else
+ 			if (curp->gzip)
+ 				(void)gzerror(gz, &gzerrnum);
+ 			mandoc_msg(MANDOCERR_READ, 0, 0, "%s",
+ 			    curp->gzip && gzerrnum != Z_ERRNO ?
+ 			    zError(gzerrnum) : strerror(errno));
++#endif
+ 			break;
+ 		}
+ 		off += (size_t)ssz;
+ 	}
+ 
++#ifdef USE_LIBARCHIVE
++	archive_read_free(a);
++#else
+ 	if (curp->gzip && (gzerrnum = gzclose(gz)) != Z_OK)
+ 		mandoc_msg(MANDOCERR_GZCLOSE, 0, 0, "%s",
+ 		    gzerrnum == Z_ERRNO ? strerror(errno) :
+ 		    zError(gzerrnum));
++#endif
+ 	if (retval == -1) {
+ 		free(fb->buf);
+ 		fb->buf = NULL;
+@@ -620,6 +652,12 @@ mparse_readfd(struct mparse *curp, int f
+ 		mandoc_msg_setinfilename(save_filename);
+ }
+ 
++#ifdef USE_LIBARCHIVE
++static const char *compression_formats[] = { "zstd", "xz", "bz2", "gz", NULL };
++#else
++static const char *compression_formats[] = { "gz", NULL };
++#endif
++
+ int
+ mparse_open(struct mparse *curp, const char *file)
+ {
+@@ -627,7 +665,9 @@ mparse_open(struct mparse *curp, const c
+ 	int		  fd, save_errno;
+ 
+ 	cp = strrchr(file, '.');
++#ifndef USE_LIBARCHIVE
+ 	curp->gzip = (cp != NULL && ! strcmp(cp + 1, "gz"));
++#endif
+ 
+ 	/* First try to use the filename as it is. */
+ 
+@@ -635,23 +675,24 @@ mparse_open(struct mparse *curp, const c
+ 		return fd;
+ 
+ 	/*
+-	 * If that doesn't work and the filename doesn't
+-	 * already  end in .gz, try appending .gz.
++	 * If that doesn't work, try appending supported
++	 * compression suffixes
+ 	 */
+-
+-	if ( ! curp->gzip) {
++	for(int i=0; compression_formats[i]; i++) {
+ 		save_errno = errno;
+-		mandoc_asprintf(&cp, "%s.gz", file);
++		mandoc_asprintf(&cp, "%s.%s", file, compression_formats[i]);
+ 		fd = open(cp, O_RDONLY);
+ 		free(cp);
+ 		errno = save_errno;
+ 		if (fd != -1) {
++#ifndef USE_LIBARCHIVE
+ 			curp->gzip = 1;
++#endif
+ 			return fd;
+ 		}
+ 	}
+ 
+-	/* Neither worked, give up. */
++	/* None worked, give up. */
+ 
+ 	return -1;
+ }
+@@ -692,7 +733,9 @@ mparse_reset(struct mparse *curp)
+ 	roff_man_reset(curp->man);
+ 	free_buf_list(curp->secondary);
+ 	curp->secondary = NULL;
++#ifndef USE_LIBARCHIVE
+ 	curp->gzip = 0;
++#endif
+ 	tag_alloc();
+ }
+ 
