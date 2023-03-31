@@ -3,7 +3,7 @@
 
 Name: mandoc
 Version: 1.14.6
-Release: 1
+Release: 2
 Source0: https://mandoc.bsd.lv/snapshots/mandoc-%{version}.tar.gz
 Patch0: mandoc-1.14.6-libarchive.patch
 Summary: Toolkit for working with man and mdoc pages
