@@ -11,6 +11,11 @@ URL: https://mandoc.bsd.lv/
 License: MIT
 Group: System/Base
 
+BuildRequires:	autoconf
+BuildRequires:	automake
+BuildRequires:	libtool-base
+BuildRequires:	slibtool
+BuildRequires:	make
 %description
 mandoc is a suite of tools compiling mdoc, the roff macro language of choice for
 BSD manual pages, and man, the predominant historical language for UNIX manuals.
